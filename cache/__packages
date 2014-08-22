@@ -1,8 +1,10 @@
 base
-datasets
-graphics
-grDevices
+caret
+e1071
+FSelector
+ggplot2
+kernlab
 knitr
-methods
-stats
-utils
+lattice
+MASS
+randomForest

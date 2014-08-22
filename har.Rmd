@@ -1,6 +1,8 @@
 Human Activity Recognition Project
 ========================================================
 
+## Preprocess data
+
 We first read in the training data:
 ```{r, cache = TRUE}
 training <- read.csv("pml-training.csv", header=TRUE, sep=",", stringsAsFactors = FALSE)
@@ -11,9 +13,97 @@ We take a look at the names (features) of this dataset (for the reason that the 
 names(training)
 ```
 
-And found that the first 5 names are: `user_name`,  `raw_timestamp_part_1`, `raw_timestamp_part_2`, and `cvtd_timestamp`. All are not relevant for predicting the activity class, i.e. how well the activity is performed. Also, we also take out the 6th name, , because it is categorical. Therefore, we take all of them out by doing the following:
-
+And found that the first 5 names are: `user_name`,  `raw_timestamp_part_1`, `raw_timestamp_part_2`, and `cvtd_timestamp`. All are not relevant for predicting the activity class, i.e. how well the activity is performed. Also, we also take out the 6th name, , because it is categorical. Therefore, we take all of them out by doing the following: 
 ```{r}
 keeps <- c(7:ncol(training))
 training <- training[keeps]
+```
+
+Because the dataset contains a lot of empty cells, I fill the empty cells with `NA`. By doing so, it will be easier when we deal with missing values later.
+```{r}
+training[training == ""] <- NA
+```
+
+A lot of columns include data types that are not numeric. To handle this, I rule out the columns that are not numeric.
+```{r}
+numeric <- sapply(training, is.numeric)
+training <- cbind(training[numeric], training$classe)
+```
+
+And don't forget to change the name of `training$classe` back to `classe` to make things easier.
+```{r}
+names(training)[length(names(training))] <- "classe"
+training$classe <- as.factor(training$classe)
+```
+
+Then we want to really clean the dataset by rule out all the rows than contain `NA`s.
+```{r}
+training <- training[complete.cases(training), ]
+```
+
+So now we can really finalize the number of features in this dataset.
+```{r}
+n_features = ncol(training) - 1 # because the very last column is the y
+n_features
+```
+
+## Explore data
+After preprocess and cleaning the data, I have `r n_features` features, which are the predictors. Let's explore the dataset a little bit. Since the amount of features is still large, instead of exploring them all, let's do a **feature selection** by using a famous algorithm - *ReliefF*.
+```{r, cache = TRUE}
+library("FSelector")
+weights <- relief(classe~., training, neighbours.count = 5, sample.size = 20)
+```
+
+This step score the **importance** of each feature and rank them according to the score. To pick the features that help the prediction, I want to rule out features with lower scores, even negative scores. To so this systematically, I test the performances on different sizes of subsets. The algorithm I pick to do the prediction is **Support Vector Machine (SVM)**.
+```{r, cache=TRUE, results="hide", warning=FALSE}
+library(caret)
+accuracies_lda = c()
+accuracies_svm = c()
+accuracies_rf = c()
+for (i in seq(1, n_features, by=10)){
+  subset <- cutoff.k(weights, i)
+  modelFit_lda <- train(training$classe ~ ., method="lda", data=training[subset])
+  modelFit_svm <- train(training$classe ~ ., method="svmRadial", data=training[subset])
+  modelFit_rf <- train(training$classe ~ ., method="rf", data=training[subset])
+  accuracies_lda <- c(accuracies_lda, modelFit_lda$results$Accuracy)
+  accuracies_svm <- c(accuracies_svm, modelFit_svm$results$Accuracy[1])
+  accuracies_rf <- c(accuracies_rf, modelFit_rf$results$Accuracy[1])
+}
+```
+
+The following plot shows the performances on different size of subsets (I first start from combining the accuracies from three algorithms into one data frame):
+```{r}
+accuracies_lda <- data.frame(cbind(method = "lda", accuracy=accuracies_lda))
+accuracies_svm <- data.frame(cbind(method = "svm", accuracy=accuracies_svm))
+accuracies_rf <-  data.frame(cbind(method = "rf", accuracy=accuracies_rf))
+accuracies <- rbind(accuracies_lda, accuracies_svm, accuracies_rf)
+id <- rep(seq(1,120,10),3)
+accuracies <- cbind(subset_size=id, accuracies)
+accuracies$accuracy <- as.numeric(as.character(accuracies$accuracy))
+library(ggplot2)
+p <- ggplot(accuracies, aes(x=subset_size, y=accuracy, group=method, colour=method))
+p + geom_line() + coord_cartesian(ylim = c(0, 1)) +geom_vline(xintercept = accuracies$subset_size[which.max(accuracies$accuracy)],data=accuracies,colour="blue")
+```
+
+As the plot above shows, when the size of subset is less than 30, the increase of accuracies as the size of subset increase is significant. However, it starts to slow down after it becomes larger than 30. The blue line in the plot indicates where the accuracy is the highest, which is `r max(accuracies$accuracy)` when the size of subset is `r accuracies$subset_size[which.max(accuracies$accuracy)]` and the method is `r accuracies$method[which.max(accuracies$accuracy)]` (random forest). The maximum accuracy point is indicated on the plot with blue vertical line.
+
+Therefore, I found the line to serve as the threshold of the amount of features to keep. So I make the new training set as the following.
+```{r}
+keeps <- c(1:accuracies$subset_size[which.max(accuracies$accuracy)])
+train_subset <- training[subset][keeps]
+ncol(train_subset)
+```
+
+## Model construction
+Now let's try out using the pruned training set and tune the Random Forest model as our final model:
+```{r warning=FALSE, message=FALSE, cache=TRUE}
+library(caret)
+modelFit_final <- train(training$classe ~ ., method="rf", data=train_subset)
+modelFit_final
+```
+
+## Model evaluation
+In the following, we use the testing dataset to evaluate the constructed model.
+```{r}
+
 ```
