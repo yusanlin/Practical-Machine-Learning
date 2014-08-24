@@ -1,33 +1,41 @@
 Human Activity Recognition Project
 ========================================================
 
+In this report, I demonstrate the steps and approach I take to use the given data from **Human Acvtivity Recognition Project** to train a model and further predict the test data. I first preprocess the data, then apply feature selection and cross validation, then finally finalize the model and test on the provided testing dataset.
+
+I expect a 70% accuracy and in the end Random Forest with 53 most referentiable variables achive this goal.
+
 ## Preprocess data
 
-We first read in the training data:
+I first read in the training data and testing data:
 ```{r, cache = TRUE}
 training <- read.csv("pml-training.csv", header=TRUE, sep=",", stringsAsFactors = FALSE)
+testing <- read.csv("pml-testing.csv", header=TRUE, sep=",", stringsAsFactors = FALSE)
 ```
 
-We take a look at the names (features) of this dataset (for the reason that the number of names/features is large, we don't show the results):
-```{r, results = "hide"}
-names(training)
-```
-
-And found that the first 5 names are: `user_name`,  `raw_timestamp_part_1`, `raw_timestamp_part_2`, and `cvtd_timestamp`. All are not relevant for predicting the activity class, i.e. how well the activity is performed. Also, we also take out the 6th name, , because it is categorical. Therefore, we take all of them out by doing the following: 
+In total, there are `r length(names(training))` features in the training set. Then I take a look at whether the features of the training and testing sets are the same:
 ```{r}
-keeps <- c(7:ncol(training))
-training <- training[keeps]
+sum(names(training) == names(testing))
+```
+The one feature less is caused by training set having `classe` and testing set having `problem_id`. All the other 159 features are the same.
+
+Also, the first 5 names are: `user_name`,  `raw_timestamp_part_1`, `raw_timestamp_part_2`, and `cvtd_timestamp`, which are not relevant for predicting the activity class, i.e. how well the activity is performed. The 6th feature is also not considered because they are categoritocal. Therefore, I take all of them out by doing the following: 
+```{r cache=TRUE}
+keeps_train <- c(7:ncol(training))
+training <- training[keeps_train]
+testing <- testing[keeps_train]
 ```
 
 Because the dataset contains a lot of empty cells, I fill the empty cells with `NA`. By doing so, it will be easier when we deal with missing values later.
 ```{r}
 training[training == ""] <- NA
+testing[testing == ""] <- NA
 ```
 
-A lot of columns include data types that are not numeric. To handle this, I rule out the columns that are not numeric.
+Then I remove all the features that include at least one missing value.
 ```{r}
-numeric <- sapply(training, is.numeric)
-training <- cbind(training[numeric], training$classe)
+training <- training[,colSums(is.na(training)) == 0]
+testing <- testing[,colSums(is.na(testing)) == 0]
 ```
 
 And don't forget to change the name of `training$classe` back to `classe` to make things easier.
@@ -36,35 +44,56 @@ names(training)[length(names(training))] <- "classe"
 training$classe <- as.factor(training$classe)
 ```
 
-Then we want to really clean the dataset by rule out all the rows than contain `NA`s.
+Then I want to check the number of features training and testing set each contain. Then take a look at what are the common features they both have after cleaning the missing values.
 ```{r}
-training <- training[complete.cases(training), ]
+ncol(training)
+ncol(testing)
+intersect(names(testing), names(training))
 ```
 
-So now we can really finalize the number of features in this dataset.
+So now I can really finalize the number of features in this dataset.
 ```{r}
-n_features = ncol(training) - 1 # because the very last column is the y
-n_features
+features = intersect(names(testing), names(training))
+n_features = length(features) # because the very last column is the y
+```
+Now I have `r n_features` features left.
+
+Before we finish the cleaning, add the `classe` labels back to the training set. Don't forget that tesing set does not need `classe` label (and they don't come with it either).
+```{r}
+training_subset <- cbind(training[, features], classe=training$classe)
+training_subset$classe <- as.factor(training_subset$classe)
+testing_subset <- testing[, features]
 ```
 
-## Explore data
-After preprocess and cleaning the data, I have `r n_features` features, which are the predictors. Let's explore the dataset a little bit. Since the amount of features is still large, instead of exploring them all, let's do a **feature selection** by using a famous algorithm - *ReliefF*.
+Due to the large size of training set (`r nrow(training)` rows), I decided to randomly sample 2.5% of the data to shorten the training time.
+```{r}
+training_subset <- training_subset[sample(1:nrow(training_subset), 400, replace=FALSE),]
+```
+
+## Explore features
+After preprocessing and cleaning the data, I have `r n_features` features, which are the predictors. Let's explore the dataset a little bit. Since the amount of features is still large, instead of exploring them all, let's do a **feature selection** by using a famous algorithm - *ReliefF*.
 ```{r, cache = TRUE}
 library("FSelector")
-weights <- relief(classe~., training, neighbours.count = 5, sample.size = 20)
+weights <- relief(classe~., training_subset, neighbours.count = 5, sample.size = 20)
+weights
 ```
 
-This step score the **importance** of each feature and rank them according to the score. To pick the features that help the prediction, I want to rule out features with lower scores, even negative scores. To so this systematically, I test the performances on different sizes of subsets. The algorithm I pick to do the prediction is **Support Vector Machine (SVM)**.
-```{r, cache=TRUE, results="hide", warning=FALSE}
+This step scores the **importance** of each feature and rank them according to the score. To pick the features that help the prediction, I want to rule out features with lower scores, even negative scores. To do so this systematically, I test the performances on different sizes of subsets. The algorithm I pick to do the prediction is **Support Vector Machine (SVM)**.
+```{r subsetDecision, cache=TRUE, results="hide", warning=FALSE}
 library(caret)
+library(FSelector)
 accuracies_lda = c()
 accuracies_svm = c()
 accuracies_rf = c()
 for (i in seq(1, n_features, by=10)){
   subset <- cutoff.k(weights, i)
-  modelFit_lda <- train(training$classe ~ ., method="lda", data=training[subset])
-  modelFit_svm <- train(training$classe ~ ., method="svmRadial", data=training[subset])
-  modelFit_rf <- train(training$classe ~ ., method="rf", data=training[subset])
+  print(i)
+  modelFit_lda <- train(classe ~ ., method="lda", data=training_subset)
+  print("finish lda")
+  modelFit_svm <- train(classe ~ ., method="svmRadial", data=training_subset)
+  print("finish svm")
+  modelFit_rf <- train(classe ~ ., method="rf", data=training_subset)
+  print("finish rf")
   accuracies_lda <- c(accuracies_lda, modelFit_lda$results$Accuracy)
   accuracies_svm <- c(accuracies_svm, modelFit_svm$results$Accuracy[1])
   accuracies_rf <- c(accuracies_rf, modelFit_rf$results$Accuracy[1])
@@ -72,12 +101,12 @@ for (i in seq(1, n_features, by=10)){
 ```
 
 The following plot shows the performances on different size of subsets (I first start from combining the accuracies from three algorithms into one data frame):
-```{r}
+```{r sortAccuracy, cache=TRUE}
 accuracies_lda <- data.frame(cbind(method = "lda", accuracy=accuracies_lda))
 accuracies_svm <- data.frame(cbind(method = "svm", accuracy=accuracies_svm))
 accuracies_rf <-  data.frame(cbind(method = "rf", accuracy=accuracies_rf))
 accuracies <- rbind(accuracies_lda, accuracies_svm, accuracies_rf)
-id <- rep(seq(1,120,10),3)
+id <- rep(seq(1,55,10),3)
 accuracies <- cbind(subset_size=id, accuracies)
 accuracies$accuracy <- as.numeric(as.character(accuracies$accuracy))
 library(ggplot2)
@@ -88,22 +117,28 @@ p + geom_line() + coord_cartesian(ylim = c(0, 1)) +geom_vline(xintercept = accur
 As the plot above shows, when the size of subset is less than 30, the increase of accuracies as the size of subset increase is significant. However, it starts to slow down after it becomes larger than 30. The blue line in the plot indicates where the accuracy is the highest, which is `r max(accuracies$accuracy)` when the size of subset is `r accuracies$subset_size[which.max(accuracies$accuracy)]` and the method is `r accuracies$method[which.max(accuracies$accuracy)]` (random forest). The maximum accuracy point is indicated on the plot with blue vertical line.
 
 Therefore, I found the line to serve as the threshold of the amount of features to keep. So I make the new training set as the following.
-```{r}
+```{r trimToSubset}
 keeps <- c(1:accuracies$subset_size[which.max(accuracies$accuracy)])
-train_subset <- training[subset][keeps]
-ncol(train_subset)
+training_subset <- data.frame(cbind(training_subset[,keeps],classe = training_subset$classe))
+ncol(training_subset)
 ```
 
 ## Model construction
 Now let's try out using the pruned training set and tune the Random Forest model as our final model:
-```{r warning=FALSE, message=FALSE, cache=TRUE}
+```{r fittingFinalMode, warning=FALSE, message=FALSE, cache=TRUE}
 library(caret)
-modelFit_final <- train(training$classe ~ ., method="rf", data=train_subset)
+modelFit_final <- train(classe ~ ., data=training_subset, method="rf")
 modelFit_final
 ```
 
-## Model evaluation
-In the following, we use the testing dataset to evaluate the constructed model.
-```{r}
+### Cross Validation
+And I do cross validation to see the justified performance of this constructed model. This returns a list of all the predicted value.
+```{r crossValidation}
+rfcv <- rfcv(trainx=training_subset[,-1], trainy=training_subset[,1], cv.fold=5, scale="log", step=0.5)
+```
 
+## Model evaluation
+In the following, I use the testing dataset to evaluate the constructed model. Then I'm ready to do the prediction :D
+```{r warning=FALSE, message=FALSE, cache=TRUE}
+predict(modelFit_final, testing_subset)
 ```
